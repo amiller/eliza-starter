@@ -39,7 +39,7 @@ import { character } from "./character.ts";
 import type { DirectClient } from "@ai16z/client-direct";
 import { createStream} from 'rotating-file-stream';
 import save_log_highlight from './actions/save_log_highlight.ts';
-
+import { start_game, give_hint, check_guess } from './actions/contest.ts';
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
@@ -54,6 +54,11 @@ const attestedLogPlugin: Plugin = {
   actions: [save_log_highlight],
 };
 
+const contestPlugin: Plugin = {
+  name: "contestPlugin",
+  description: "Plugin for managing a word guessing game",
+  actions: [start_game, give_hint, check_guess],
+};
 
 const accessLogStream = createStream('agent.log', {
   interval: '1m', // rotate hourly
@@ -267,6 +272,7 @@ export function createAgent(
     plugins: [
       bootstrapPlugin,
       attestedLogPlugin,
+      contestPlugin,
       nodePlugin,
       character.settings.secrets?.WALLET_PUBLIC_KEY ? solanaPlugin : null,
     ].filter(Boolean),
@@ -404,3 +410,21 @@ async function handleUserInput(input, agentId) {
     console.error("Error fetching response:", error);
   }
 }
+
+export const examples = [
+  [
+    {
+      user: "{{user1}}",
+      content: {
+        text: "let's start the game game",
+      },
+    },
+    {
+      user: "Tee16Z",
+      content: {
+        text: "I've started a new game! I've picked a secret word from an interesting article. Try to guess it! Use 'give hint' for a clue.",
+        action: "START_GAME",
+      },
+    },
+  ]
+];
