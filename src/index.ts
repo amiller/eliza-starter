@@ -8,6 +8,7 @@ import { TwitterClientInterface } from "@ai16z/client-twitter";
 import {
   DbCacheAdapter,
   defaultCharacter,
+  Action,
   FsCacheAdapter,
   ICacheManager,
   IDatabaseCacheAdapter,
@@ -16,11 +17,14 @@ import {
   CacheManager,
   Character,
   IAgentRuntime,
+  State,
+  Memory,
   ModelProviderName,
   elizaLogger,
   settings,
   IDatabaseAdapter,
   validateCharacterConfig,
+  Plugin,
 } from "@ai16z/eliza";
 import { bootstrapPlugin } from "@ai16z/plugin-bootstrap";
 import { solanaPlugin } from "@ai16z/plugin-solana";
@@ -33,15 +37,79 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { character } from "./character.ts";
 import type { DirectClient } from "@ai16z/client-direct";
+import { createStream} from 'rotating-file-stream';
+import save_log_highlight from './actions/save_log_highlight.ts';
+import { BlobServiceClient } from '@azure/storage-blob';
+
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
+
+const logDirectory = path.join(__dirname, '../logs', character.name);
+
+fs.existsSync(logDirectory) || fs.mkdirSync(logDirectory);
+
+const attestedLogPlugin: Plugin = {
+  name: "attestedLog",
+  description: "Plugin for creating attested log snapshots",
+  actions: [save_log_highlight],
+};
+
+
+const accessLogStream = createStream('agent.log', {
+  interval: '20m', // rotate hourly
+  path: logDirectory,
+  size: '10M', // rotate when size exceeds 10MB
+  maxFiles: 7
+});
+
+// Store original console methods and create patched versions
+const methods = ['log', 'error', 'warn', 'info'] as const;
+const originalConsole = {} as Record<typeof methods[number], typeof console.log>;
+
+methods.forEach(method => {
+  originalConsole[method] = console[method];
+  console[method] = (...args) => {
+    const message = args.map(arg => 
+      typeof arg === 'object' ? JSON.stringify(arg) : arg
+    ).join(' ');
+    accessLogStream.write(`${new Date().toISOString()} [${method.toUpperCase()}] ${message}\n`);
+    originalConsole[method].apply(console, args);
+  };
+});
+
+
 
 export const wait = (minTime: number = 1000, maxTime: number = 3000) => {
   const waitTime =
     Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
   return new Promise((resolve) => setTimeout(resolve, waitTime));
 };
+
+accessLogStream.on('rotated', async (filename: string) => {
+  // Upload rotated log file to Azure Blob Storage
+  try {    
+    const blobServiceClient = BlobServiceClient.fromConnectionString(
+      process.env.AZURE_BLOB_CONNECTION_STRING || ''
+    );
+
+    const containerName = 'agent-logs-'+character.name.toLowerCase();
+    const containerClient = blobServiceClient.getContainerClient(containerName);
+    
+    // Create container if it doesn't exist
+    await containerClient.createIfNotExists();
+
+    const blobName = `${character.name}/${path.basename(filename)}`;
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+    await blockBlobClient.uploadFile(filename);
+    console.log(`Uploaded ${filename} to Azure Blob Storage as ${blobName}`);
+  } catch (error) {
+    console.error('Error uploading log to Azure:', error);
+  }
+  console.log(`Log rotated, previous file: ${filename}`);
+});
+
 
 export function parseArguments(): {
   character?: string;
@@ -219,6 +287,7 @@ export function createAgent(
     character,
     plugins: [
       bootstrapPlugin,
+      attestedLogPlugin,
       nodePlugin,
       character.settings.secrets?.WALLET_PUBLIC_KEY ? solanaPlugin : null,
     ].filter(Boolean),
