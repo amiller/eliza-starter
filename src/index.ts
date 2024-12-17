@@ -40,6 +40,8 @@ import type { DirectClient } from "@ai16z/client-direct";
 import { createStream} from 'rotating-file-stream';
 import save_log_highlight from './actions/save_log_highlight.ts';
 import { start_game, give_hint, check_guess } from './actions/contest.ts';
+import { BlobServiceClient } from '@azure/storage-blob';
+
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
@@ -61,7 +63,7 @@ const contestPlugin: Plugin = {
 };
 
 const accessLogStream = createStream('agent.log', {
-  interval: '1m', // rotate hourly
+  interval: '20m', // rotate hourly
   path: logDirectory,
   size: '10M', // rotate when size exceeds 10MB
   maxFiles: 7
@@ -90,7 +92,27 @@ export const wait = (minTime: number = 1000, maxTime: number = 3000) => {
   return new Promise((resolve) => setTimeout(resolve, waitTime));
 };
 
-accessLogStream.on('rotated', (filename: string) => {
+accessLogStream.on('rotated', async (filename: string) => {
+  // Upload rotated log file to Azure Blob Storage
+  try {    
+    const blobServiceClient = BlobServiceClient.fromConnectionString(
+      process.env.AZURE_BLOB_CONNECTION_STRING || ''
+    );
+
+    const containerName = 'agent-logs-'+character.name.toLowerCase();
+    const containerClient = blobServiceClient.getContainerClient(containerName);
+    
+    // Create container if it doesn't exist
+    await containerClient.createIfNotExists();
+
+    const blobName = `${character.name}/${path.basename(filename)}`;
+    const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+
+    await blockBlobClient.uploadFile(filename);
+    console.log(`Uploaded ${filename} to Azure Blob Storage as ${blobName}`);
+  } catch (error) {
+    console.error('Error uploading log to Azure:', error);
+  }
   console.log(`Log rotated, previous file: ${filename}`);
 });
 
