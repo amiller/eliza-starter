@@ -5,7 +5,8 @@ import {
     IAgentRuntime,
     HandlerCallback,
     generateText,
-    elizaLogger
+    elizaLogger,
+    ModelClass,
 } from "@ai16z/eliza";
 
 // In-memory storage for contest state
@@ -119,18 +120,11 @@ export const start_game: Action = {
     options: any,
     callback: HandlerCallback
   ) => {
-    elizaLogger.log("Generating article for word guessing game...");
+    elizaLogger.log("Fetching random Wikipedia article...");
     
-    const article = await generateText({
-      runtime,
-      context: `
-      Generate a short, interesting article about a random topic.
-      Keep it under 300 words and make it engaging.
-      Response should be just the article text, no title or metadata.
-    `,
-      modelClass: "gpt-4o-mini",
-      stop: ["\n\n"]
-    });
+    const response = await fetch("https://en.wikipedia.org/api/rest_v1/page/random/summary");
+    const data = await response.json();
+    const article = data.extract;
 
     elizaLogger.log("Article generated, selecting secret word...");
 
@@ -149,7 +143,7 @@ export const start_game: Action = {
     const secretWord = (await generateText({
       runtime,
       context: wordPrompt,
-      modelClass: "gpt-4o-mini",
+      modelClass: ModelClass.SMALL,
       stop: ["\n\n"]
     })).toLowerCase().trim();
 
@@ -167,7 +161,9 @@ export const start_game: Action = {
       userId: message.userId
     });
 
-    return "I've started a new game! I've picked a secret word from an interesting article. Try to guess it! Use 'give hint' for a clue.";
+    callback({
+      text: "I've started a new game! I've picked a secret word from an interesting article. Try to guess it! Use 'give hint' for a clue."
+    });
   },
 
   examples: [
@@ -226,6 +222,7 @@ export const give_hint: Action = {
       
       Generate a clever hint about the secret word. 
       - Don't reveal the word directly
+      - If possible, the hint should be inspired by the 
       - Use context from the article
       - Make it challenging but fair
       - Keep it short (under 15 words)
@@ -233,11 +230,13 @@ export const give_hint: Action = {
       Return only the hint, no other text.
     `;
 
-    return await generateText({
-      runtime,
-      context: hintPrompt,
-      modelClass: "gpt-4o-mini",
-      stop: ["\n\n"]
+    callback({
+      text: await generateText({
+        runtime,
+        context: hintPrompt,
+        modelClass: ModelClass.LARGE,
+        stop: ["\n\n"]
+      })
     });
   },
 
@@ -272,16 +271,50 @@ export const check_guess: Action = {
       return "There's no active game running. Start a new game first!";
     }
 
-    const guess = message.content.text.toLowerCase().trim();
+    // Extract the guessed word from the message using a prompt
+    const extractPrompt = `
+      Extract just the guessed word from this message: "${message.content.text}"
+      Return only the single word, no other text.
+    `;
+
+    const extractedGuess = await generateText({
+      runtime,
+      context: extractPrompt, 
+      modelClass: ModelClass.SMALL,
+      stop: ["\n"]
+    });
+
+    // Use the extracted word as the guess
+    const guess = extractedGuess.toLowerCase().trim();
+
+    elizaLogger.log(`Extracted guess: ${guess}`);
+    elizaLogger.log(`Secret word: ${contestState.secretWord}`);
 
     if (guess === contestState.secretWord) {
       const response = `Correct! The word was "${contestState.secretWord}"! Would you like to play again?`;
       contestState = null; // Reset game
-      return response;
+      callback({text: response});
+      return;
     }
 
-    return `Sorry, "${guess}" is not the word I'm thinking of. Keep trying!`;
+    callback({text: `Sorry, "${guess}" is not the word I'm thinking of. Keep trying!`});
+    return;
   },
 
-  examples: []
+  examples: [
+    [
+      {
+        user: "{{user1}}",
+        content: {
+          text: "My guess is 'chocolate'"
+        }
+      },
+      {
+        user: "Tee16Z", 
+        content: {
+          text: "That's Correct! The word was \"chocolate\"! Would you like to play again?"
+        }
+      }
+    ]
+  ]
 }; 
