@@ -147,7 +147,8 @@ export const start_game: Action = {
       stop: ["\n\n"]
     })).toLowerCase().trim();
 
-    elizaLogger.log(`Secret word selected: ${secretWord}`);
+    console.log(`Secret word selected:`);
+    console.log(`REDACTED: ${secretWord}`);
 
     contestState = {
       article,
