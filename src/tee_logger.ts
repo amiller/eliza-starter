@@ -4,13 +4,15 @@ import { BlobServiceClient } from '@azure/storage-blob';
 import { Character } from '@ai16z/eliza';
 import { RotatingFileStream, createStream } from 'rotating-file-stream';
 import crypto from 'crypto';
-
-const logDirectory = path.join(process.cwd(), 'logs');
-fs.existsSync(logDirectory) || fs.mkdirSync(logDirectory);
+import net from 'net';
 
 let accessLogStream: RotatingFileStream | null = null;
+let lastHash: string = '';  // Store last hash in memory
 
-export function setup_teelogger(logDirectory: string, character: Character) {
+export function setup_teelogger(character: Character) {
+    const logDirectory = path.join(process.cwd(), 'logs');
+    fs.existsSync(logDirectory) || fs.mkdirSync(logDirectory);
+    
     const accessLogStream = createStream(`agent-${character.name}.log`, {
         interval: '1m', // rotate hourly
         path: logDirectory,
@@ -46,6 +48,11 @@ export function setup_teelogger(logDirectory: string, character: Character) {
 
 async function upload_to_azure(character: Character, filePath: string, isRedacted: boolean = false) {
     try {
+	// Only append hash chain and attestation for sanitized logs
+        if (isRedacted) {
+            await appendHashAndAttestation(filePath);
+        }
+
         const blobServiceClient = BlobServiceClient.fromConnectionString(
             process.env.AZURE_BLOB_CONNECTION_STRING || ''
         );
@@ -97,13 +104,81 @@ async function createSanitizedLog(filePath: string): Promise<string> {
     }).join('\n');
 }
 
+async function calculateFileHash(filePath: string): Promise<string> {
+    const fileBuffer = await fs.promises.readFile(filePath);
+    return crypto.createHash('sha256').update(fileBuffer).digest('hex');
+}
+
+async function getTdxAttestation(hash: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        try {
+            const client = net.createConnection('/var/run/tappd.sock');
+            const payload = {
+                report_data: Buffer.from(hash).toString('hex')
+            };
+
+            const request = [
+                'POST /prpc/Tappd.TdxQuote HTTP/1.1',
+                'Host: localhost',
+                'Content-Type: application/json',
+                `Content-Length: ${Buffer.byteLength(JSON.stringify(payload))}`,
+                '',
+                JSON.stringify(payload)
+            ].join('\r\n');
+
+            let response = '';
+
+            client.on('connect', () => {
+                client.write(request + '\r\n');
+            });
+
+            client.on('data', (data) => {
+                response += data.toString();
+            });
+
+            client.on('end', () => {
+                // Extract the JSON response body from HTTP response
+                const bodyMatch = response.match(/\r\n\r\n(.+)$/s);
+                if (bodyMatch) {
+                    resolve(bodyMatch[1].trim());
+                } else {
+                    resolve('');
+                }
+            });
+
+            client.on('error', (err) => {
+                console.error('Error connecting to TDX socket:', err);
+                resolve('');
+            });
+        } catch (error) {
+            console.error('Error in TDX attestation:', error);
+            resolve('');
+        }
+    });
+}
+
+async function appendHashAndAttestation(filePath: string): Promise<void> {
+    const currentHash = await calculateFileHash(filePath);
+    const attestation = await getTdxAttestation(currentHash);
+    
+    const appendContent = [
+        `Last Hash: ${lastHash}`,
+        `New Hash: ${currentHash}`,
+        `Attestation: ${attestation}`,
+        ''  // Add newline at end
+    ].join('\n');
+    
+    await fs.promises.appendFile(filePath, appendContent);
+    lastHash = currentHash;  // Update lastHash directly
+}
+
 async function handleLogRotation(character: Character, newFile: string) {
     try {
         // Upload original file
         await upload_to_azure(character, newFile);
 
         // Handle redacted version if enabled
-        if (process.env.ENABLE_LOG_REDACTION === 'true') {
+        if (!(process.env.ENABLE_LOG_REDACTION === 'false')) {
             const sanitizedPath = newFile + '.sanitized';
             const sanitizedContent = await createSanitizedLog(newFile);
             await fs.promises.writeFile(sanitizedPath, sanitizedContent);
