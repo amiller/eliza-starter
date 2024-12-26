@@ -8,6 +8,7 @@ import { TwitterClientInterface } from "@ai16z/client-twitter";
 import {
   DbCacheAdapter,
   defaultCharacter,
+  Action,
   FsCacheAdapter,
   ICacheManager,
   IDatabaseCacheAdapter,
@@ -16,11 +17,14 @@ import {
   CacheManager,
   Character,
   IAgentRuntime,
+  State,
+  Memory,
   ModelProviderName,
   elizaLogger,
   settings,
   IDatabaseAdapter,
   validateCharacterConfig,
+  Plugin,
 } from "@ai16z/eliza";
 import { bootstrapPlugin } from "@ai16z/plugin-bootstrap";
 import { solanaPlugin } from "@ai16z/plugin-solana";
@@ -33,15 +37,15 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { character } from "./character.ts";
 import type { DirectClient } from "@ai16z/client-direct";
+import { createStream} from 'rotating-file-stream';
+import { BlobServiceClient } from '@azure/storage-blob';
+import { setup_teelogger } from "./tee_logger.ts";
+
 
 const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
 const __dirname = path.dirname(__filename); // get the name of the directory
 
-export const wait = (minTime: number = 1000, maxTime: number = 3000) => {
-  const waitTime =
-    Math.floor(Math.random() * (maxTime - minTime + 1)) + minTime;
-  return new Promise((resolve) => setTimeout(resolve, waitTime));
-};
+setup_teelogger(character);
 
 export function parseArguments(): {
   character?: string;

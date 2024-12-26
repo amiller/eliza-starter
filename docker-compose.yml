@@ -1,0 +1,35 @@
+version: '3.9'
+services:
+  eliza:
+    image: socrates1024/eliza
+    stdin_open: true
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /tmp/tapp-ramdisk:/tmp/tapp-ramdisk
+    environment:
+      - X_USERNAME=henncamy
+      - SQLITE_DB_PATH="./data/agents.db"
+      - SECURE_FILE=/tmp/tapp-ramdisk/private.env
+    networks:
+      my_network:
+        ipv4_address: 172.24.1.3
+  replicatoor:
+    image: socrates1024/replicatoor@sha256:a340461bf0a9f6593493b4453dbf83d044317935a7870439199f6630810bb32a
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+      - /tmp/tapp-ramdisk:/tmp/tapp-ramdisk
+    environment:
+      - SECURE_FILE=/tmp/tapp-ramdisk/private.env
+      - CONTRACT=0x2c5032c6b1ec3d13acc81758d83e0b4478e153ff
+      - ETH_RPC_PREFIX=https://base-mainnet.g.alchemy.com/v2/
+      - CHAIN_ID=8453
+    networks:
+      my_network:
+        ipv4_address: 172.24.1.2
+
+networks:
+  my_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.24.1.0/24
